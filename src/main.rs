@@ -1,3 +1,4 @@
+#![allow(unused)]
 use sysinfo::{ System, CpuRefreshKind, RefreshKind };
 mod device;
 mod process;
