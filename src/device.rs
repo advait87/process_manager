@@ -18,7 +18,7 @@ pub struct Device {
 }
 
 impl Device {
-    fn run_process(&self, _process: Process) -> Result<i32, ProcessError> {
+    pub fn run_process(&mut self, _process: Process) -> Result<i32, ProcessError> {
         if self.device_info.allowed_max_core_count < _process.process_requirements.cores {
             return Err(ProcessError::NotEnoughAllowedMaxCoreCount)
         } else if self.device_info.allowed_max_memory_in_megabytes < _process.process_requirements.memory_in_megabytes {
@@ -33,19 +33,25 @@ impl Device {
 }
 
 impl DeviceInfo {
-    fn new(allowed_max_memory_in_megabytes: Option<u64>, allowed_max_core_count: Option<usize>) -> Result<Self, ()> {
+    pub fn new(allowed_max_memory_in_megabytes: Option<u64>, allowed_max_core_count: Option<usize>) -> Result<Self, ()> {
         let physical_core_count = match System::physical_core_count() {
             Ok(p) => p,
             Err(e) => return Err(())
         };
         match System::new() {
-            Ok(s) => {
+            Ok(mut s) => {
+                s.refresh_all();
                 return Ok(DeviceInfo {
                     // For pleasing the compiler, I've put the device_system: s at the end, though
                     // it's not what I like. But it's a little out of my depth, will solve later
                     // TODO read above comment
                     total_memory_in_megabytes: s.total_memory()/1024/1024,
-                    allowed_max_memory_in_megabytes: allowed_max_memory_in_megabytes.unwrap_or_else(|| s.available_memory()/1024/1024),
+                    allowed_max_memory_in_megabytes: allowed_max_memory_in_megabytes.unwrap_or_else(|| {
+                        let m = s.available_memory()/1024/1024;
+                        println!("available memory: {}", s.available_memory());
+                        println!("[INFO] allowed_max_memory_in_megabytes not specified. Setting allowed_max_memory_in_megabytes to: {}", m);
+                        m
+                    }),
                     allowed_max_core_count: allowed_max_core_count.unwrap_or_else(|| physical_core_count),
                     device_system: s,
                     physical_core_count,
@@ -56,12 +62,14 @@ impl DeviceInfo {
         Err(())
     }
 
-    fn available_memory_in_megabytes(&self) -> u64 {
+    pub fn available_memory_in_megabytes(&mut self) -> u64 {
+        self.device_system.refresh_memory();
         return self.device_system.available_memory()/1024/1024
     }
 
     // TODO
-    fn available_cores(&self) -> usize {
+    pub fn available_cores(&mut self) -> usize {
+        self.device_system.refresh_all();
         return 1
     }
 
