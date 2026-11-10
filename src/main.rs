@@ -2,7 +2,9 @@
 use sha2::{ Digest, Sha256 };
 use sysinfo::{ System, CpuRefreshKind, RefreshKind };
 mod device;
+mod helpers;
 mod process;
+mod selector;
 
 
 fn main() {
