@@ -10,7 +10,9 @@ use axum::{
 };
 
 use crate::device::{ Device, DeviceInfo, DevicePublicInfo };
-use std::sync::Arc;
+use std::{io::Read, sync::Arc};
+use std::sync::Mutex;
+use std::ops::DerefMut;
 
 mod device;
 mod helpers;
@@ -28,12 +30,12 @@ async fn main() {
         device_info: DeviceInfo::new(None, None).expect("Couldn't get system info")
     };
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    let app = axum::Router::<Arc::<Device>>::new()
+    let app = axum::Router::<Arc::<Mutex::<Device>>>::new()
         .route("/", get(node_info))
         .route("/request_execution", post(request_execution))
-        .with_state(Arc::new(this_device))
+        .with_state(Arc::new(Mutex::new(this_device)))
     ;
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }
 
@@ -51,10 +53,10 @@ async fn request_execution(Json(body): Json<RequestExecutionRequest>) -> Result<
 }
 
 #[axum::debug_handler]
-async fn node_info(State(mut this_device): State<Arc::<Device>>) -> Result<Json<DevicePublicInfo>, StatusCode> {
-    match Arc::get_mut(&mut this_device).take() {
-        Some(this_device) => Ok(Json(this_device.public_info())),
-        None => Err(StatusCode::INTERNAL_SERVER_ERROR)
+async fn node_info(State(mut this_device): State<Arc::<Mutex::<Device>>>) -> Result<Json<DevicePublicInfo>, StatusCode> {
+    match this_device.lock() {
+        Ok(mut this_device) => Ok(Json(this_device.deref_mut().public_info())),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR)
     }
 }
 

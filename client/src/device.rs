@@ -3,6 +3,7 @@ use sha2::{ Sha256, Digest };
 use sysinfo::System;
 use serde::{ Deserialize, Serialize };
 
+#[derive(Debug)]
 pub struct DeviceInfo {
     pub device_system: System,
     pub total_memory_in_megabytes: u64,
@@ -72,6 +73,7 @@ impl DeviceInfo {
     }
 }
 
+#[derive(Debug)]
 pub struct Device {
     pub hash: [u8; 32],
     // maybe update this to make it a reference to DeviceInfo if needed
