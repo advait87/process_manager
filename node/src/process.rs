@@ -1,10 +1,9 @@
 use crate::device;
 use serde::{ Deserialize, Serialize };
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Process {
-    pub argument: i32,
-    pub process_function: fn(i32) -> i32,
+    pub python_code: String,
     pub process_requirements: ProcessRequirements
 }
 
@@ -16,6 +15,7 @@ pub struct ProcessRequirements {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub enum ProcessError {
+    FailedToCreateFile,
     NotEnoughAllowedMaxMemory,
     NotEnoughAllowedMaxCoreCount,
     NotEnoughAvailableMemory,
