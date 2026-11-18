@@ -1,8 +1,10 @@
-use crate:: { process:: { Process, ProcessError, ProcessRequirements }, helpers::python_docker_file_string };
+use crate::{helpers::get_hash_string, process::{ GithubRepo, Process, ProcessError, ProcessRequirements }};
+use reqwest;
 use sha2::{ Sha256, Digest };
 use sysinfo::System;
 use serde::{ Deserialize, Serialize };
-use std::{ fs::File, io::Write, path::Path, process::ExitStatus };
+use std::{ env::var, fs::{File, OpenOptions}, io::Write, path::Path, process::{ Command, ExitStatus } };
+use zip::ZipArchive;
 
 #[derive(Debug)]
 pub struct DeviceInfo {
@@ -95,113 +97,120 @@ pub struct Device {
 
 
 impl Device {
-    // The reason why process_function is abstracted into run_process is cause run_process will
-    // handle and return ProcessError if it happens - out of resources, runtime error, etc
-    // Okay, so I'm changing run_process. It'll instead of running a native rust function, it'll run
-    // python/JS code in a sandbox, and return a signal that the process has started or return an
-    // error
-    pub fn run_process(&mut self, _process: Process) -> Result<(), ProcessError> {
-        match self.device_info.check_requirements(&_process) {
-            Ok(()) => {
-                let python_file_path = Path::new("/tmp/process_manager/python_code.py");
-                // spin up a docker image, for now it'll be for python, and execute the python file
-                // in that docker container
-                let file_path = Path::new("/tmp/process_manager/tmpfile");
-                println!("Creating docker file: {}", file_path.to_str().unwrap().to_string());
-                let file = match File::create(file_path) {
-                    Ok(mut file) => {
-                        println!("Created file");
-                        let docker_file_string = python_docker_file_string(python_file_path);
-                        match file.write_all(docker_file_string.as_bytes()) {
-                            Ok(_) => { println!("Wrote to docker file") },
-                            Err(e) => {
-                                println!("Failed to create docker file: {}", e);
-                                return Err(ProcessError::FailedToCreateFile)
-                            }
-                        }
-                        file
-                    },
-                    Err(e) => {
-                        println!("couldn't create docker file: {}", e);
-                        return Err(ProcessError::FailedToCreateFile);
-                    }
+    // I'm again changing the process. The node will fetch a git repo that contains a Dockerfile.
+    // It'll use that to build & run the image
+    // pub async fn run_process(&mut self, _process: Process) -> Result<(), ProcessError> {
+    pub async fn run_process(&self, github_repo: GithubRepo) {
+        // https://github.com/Metis-IITGandhinagar/insiit-backend-rust/archive/refs/heads/master.zip
+        let url = format!("https://github.com/{}/{}/archive/refs/heads/{}.zip", github_repo.username, github_repo.repo_name, github_repo.branch);
+        // Take this from an env variabld
+        let output_path = var("GITHUB_REPO_DOWNLOAD_PATH").expect("No path specified to save the github repo");
+        let response = match reqwest::get(url).await {
+            Ok(r) => r,
+            Err(e) => {
+                println!("[ERROR] Failed fetching repo: {}", e);
+                return
+                // return Err(ProcessError::FailedToCreateFile);
+            }
+        };
+        let bytes = match response.bytes().await{
+            Ok(b) => b,
+            Err(e) => {
+                println!("[ERROR] Failed converting reponse to bytes: {}", e);
+                return
+                // return Err(ProcessError::FailedToCreateFile);
+            }
+        };
+        let zip_file_name = get_hash_string(format!("{}/{}/{}", github_repo.username, github_repo.repo_name, github_repo.branch));
+        let zip_file_path = format!("{}/{}.zip", output_path, zip_file_name);
 
-                };
-
-
-                let python_file = match File::create(python_file_path) {
-                    Ok(mut python_file) => {
-                        println!("Created file");
-                        match python_file.write_all(_process.python_code.as_bytes()) {
-                            Ok(_) => { println!("Wrote to python file") },
-                            Err(e) => {
-                                println!("Failed to create python file: {}", e);
-                                return Err(ProcessError::FailedToCreateFile)
-                            }
-                        }
-                        file
-                    },
-                    Err(e) => {
-                        println!("couldn't create python file: {}", e);
-                        return Err(ProcessError::FailedToCreateFile);
-                    }
-
-                };
-
-                // TODO WARN don't unwrap, handle
-                println!("Building from file: {}", file_path.to_str().unwrap().to_string());
-                println!("Running command: {}", format!("docker build -f {} -t tmpimage /tmp/process_manager", file_path.to_str().unwrap().to_string()));
-                let image_build_output = match std::process::Command::new("docker")
-                    .arg("build")
-                    .arg("-f")
-                    .arg(file_path)
-                    .arg("-t")
-                    .arg("tmpimage")
-                    .arg("/tmp/process_manager")
-                    .output() {
-                        Ok(output) => {
-                            println!("Executed docker build command");
-                            match output.status.success() {
-                                true => {
-                                    // TODO WARN don't unwrap, handle
-                                    println!("The process returned output: {}", String::from_utf8(output.stdout).unwrap());
-                                },
-                                false => {
-                                    // TODO WARN don't unwrap, handle
-                                    println!("The process failed with output: {}", String::from_utf8(output.stderr).unwrap());
-                                }
-                            }
-                        },
-                        Err(e) => {
-                            println!("Couldn't execute build command: {}", e);
-
-                        }
-                    };
-                let final_output = match std::process::Command::new("docker")
-                    .arg("run")
-                    .arg("tmpimage")
-                    .output() {
-                        Ok(output) => {
-                            println!("Executed docker run command");
-                            match output.status.success() {
-                                true => {
-                                    // TODO WARN don't unwrap, handle
-                                    println!("The process returned output: {}", String::from_utf8(output.stdout).unwrap());
-                                },
-                                false => {
-                                    // TODO WARN don't unwrap, handle
-                                    println!("The process failed with output: {}", String::from_utf8(output.stderr).unwrap());
-                                }
-                            }
-                        },
-                        Err(e) => {
-                            println!("The run command failed: {}", e);
-                        }
-                    };
-                Ok(())
-            },
-            Err(e) => Err(e)
+        let mut file = match OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&zip_file_path) {
+                Ok(f) => f,
+                Err(e) => {
+                    println!("[ERROR] Failed to create zip file: {}", e);
+                    return
+                }
+            };
+        match file.write_all(&bytes) {
+            Ok(_) => {},
+            Err(e) => println!("[ERROR] Failed to write to zip file: {}", e)
         }
+
+        let target_dir = format!("{}/{}", output_path, zip_file_name);
+        let target_dir_path = Path::new(&target_dir);
+        let mut archive = match ZipArchive::new(file) {
+            Ok(z) => z,
+            Err(e) => {
+                println!("[ERROR] Failed to validate zip file: {}", e);
+                return
+                // return Err(ProcessError::FailedToCreateFile);
+            }
+        };
+        match archive.extract(target_dir_path) {
+            Ok(_) => {},
+            Err(e) => {
+                println!("[ERROR] Failed to extract zip file: {}", e);
+                // return Err(ProcessError::FailedToCreateFile);
+            }
+        }
+
+        match Command::new("docker")
+            .arg("build")
+            .arg("-f")
+            .arg(format!("{}/{}-{}/Dockerfile", target_dir, github_repo.repo_name, github_repo.branch))
+            .arg("-t")
+            .arg(format!("{}/{}/{}", github_repo.username, github_repo.repo_name, github_repo.branch))
+            .arg(format!("{}/{}-{}", target_dir, github_repo.repo_name, github_repo.branch))
+            .output() {
+                Ok(output) => {
+                    match output.status.success() {
+                        true => {
+                            // TODO Just check once if the stdout/stderr are always utf8
+                            println!("[INFO] Successfully created docker image with stdout: {}", String::from_utf8(output.stdout).unwrap());
+                        },
+                        false => {
+                            println!("[INFO] Failed to create docker image with stderr: {}", String::from_utf8(output.stderr).unwrap());
+                            // return Err(ProcessError::FailedToCreateFile);
+                        }
+                    }
+                },
+                Err(e) => {
+                    println!("[ERROR] Failed to execute docker build command: {}", e);
+                    // return Err(ProcessError::FailedToCreateFile);
+                }
+            }
+        match Command::new("docker")
+            .arg("run")
+            .arg("-p")
+            .arg("4761:4761")
+            .arg("-d")
+            .arg(format!("{}/{}/{}", github_repo.username, github_repo.repo_name, github_repo.branch))
+            .output() {
+                Ok(output) => {
+                    match output.status.success() {
+                        true => {
+                            println!("[INFO] Successfully ran the docker container with stdout:\n{}", String::from_utf8(output.stdout).unwrap());
+                        },
+                        false => {
+                            // I don't know if this is a possible output path, cause if a
+                            // docker image fails to run, it should go in the Err(e) path of
+                            // the outer match, and if the inner code fails, it'll still be
+                            // error 0 for the docker run command
+                            println!("[INFO] Failed to run the docker container with stdout:\n{}", String::from_utf8(output.stderr).unwrap());
+                        }
+                    }
+                },
+                Err(e) => {
+                    println!("[ERROR] Failed to execute docker run command: {}", e);
+                    // return Err(ProcessError::FailedToCreateFile);
+                }
+            }
+        // Ok(())
     }
 
     pub fn public_info(&mut self) -> DevicePublicInfo {

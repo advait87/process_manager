@@ -3,8 +3,15 @@ use serde::{ Deserialize, Serialize };
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Process {
-    pub python_code: String,
+    pub github_repo: GithubRepo,
     pub process_requirements: ProcessRequirements
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct GithubRepo {
+    pub username: String,
+    pub repo_name: String,
+    pub branch: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
